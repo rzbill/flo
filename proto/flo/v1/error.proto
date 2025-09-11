@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package flo.v1;
+
+option go_package = "github.com/rzbill/flo/proto/gen/go/flo/v1;flov1";
+
+// Error model
+//
+// Flo uses canonical gRPC status codes for errors. REST responses map these
+// to HTTP status codes. The following enum documents the expected mapping
+// for API surfaces in this package. Do not rely on these values on the wire;
+// they are provided for documentation and potential use in error details.
+//
+// Canonical mapping:
+// - INVALID_ARGUMENT → 400 Bad Request
+// - NOT_FOUND → 404 Not Found
+// - ALREADY_EXISTS → 409 Conflict
+// - DEADLINE_EXCEEDED → 504 Gateway Timeout
+// - RESOURCE_EXHAUSTED → 429 Too Many Requests
+// - ABORTED → 409 Conflict
+// - UNAVAILABLE → 503 Service Unavailable
+// - INTERNAL → 500 Internal Server Error
+// - PERMISSION_DENIED → 403 Forbidden
+// - UNAUTHENTICATED → 401 Unauthorized
+enum FloErrorCode {
+  FLO_ERROR_CODE_UNSPECIFIED = 0;
+  FLO_INVALID_ARGUMENT = 1;
+  FLO_NOT_FOUND = 2;
+  FLO_ALREADY_EXISTS = 3;
+  FLO_DEADLINE_EXCEEDED = 4;
+  FLO_RESOURCE_EXHAUSTED = 5;
+  FLO_ABORTED = 6;
+  FLO_UNAVAILABLE = 7;
+  FLO_INTERNAL = 8;
+  FLO_PERMISSION_DENIED = 9;
+  FLO_UNAUTHENTICATED = 10;
+}
+
+

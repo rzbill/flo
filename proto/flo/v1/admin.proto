@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package flo.v1;
+
+option go_package = "github.com/rzbill/flo/proto/gen/go/flo/v1;flov1";
+
+// Admin provides introspection and housekeeping APIs.
+service AdminService {
+  rpc ListQueues(ListQueuesRequest) returns (ListQueuesResponse);
+  rpc ListDLQ(ListDLQRequest) returns (ListDLQResponse);
+  rpc RequeueFromDLQ(RequeueFromDLQRequest) returns (RequeueFromDLQResponse);
+  rpc Trim(TrimRequest) returns (TrimResponse);
+  rpc Stats(StatsRequest) returns (StatsResponse);
+}
+
+message ListQueuesRequest { string namespace = 1; }
+message ListQueuesResponse { repeated string queues = 1; }
+
+message ListDLQRequest { string namespace = 1; string queue = 2; int32 limit = 3; }
+message ListDLQResponse { repeated bytes ids = 1; }
+
+message RequeueFromDLQRequest { string namespace = 1; string queue = 2; repeated bytes ids = 3; }
+message RequeueFromDLQResponse {}
+
+message TrimRequest { string namespace = 1; string resource = 2; int64 max_age_ms = 3; int64 max_bytes = 4; }
+message TrimResponse {}
+
+message StatsRequest { string namespace = 1; }
+message StatsResponse { map<string, string> metrics = 1; }
+
+

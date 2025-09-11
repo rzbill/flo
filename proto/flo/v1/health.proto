@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package flo.v1;
+
+option go_package = "github.com/rzbill/flo/proto/gen/go/flo/v1;flov1";
+
+// Health service exposes a basic liveness probe.
+service HealthService {
+  // Check returns OK if the server/runtime is healthy.
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  // A human-readable status like "ok".
+  string status = 1;
+}
+
+

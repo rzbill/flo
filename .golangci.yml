@@ -1,0 +1,23 @@
+run:
+  timeout: 5m
+  go: "1.23"
+  skip-dirs:
+    - legacy
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - gofmt
+    - ineffassign
+    - gosimple
+    - unused
+    - revive
+
+issues:
+  exclude-use-default: false
+  exclude-dirs:
+    - proto/gen
+
+
