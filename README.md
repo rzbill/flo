@@ -47,7 +47,6 @@ _ = q.Complete(ctx, "workers", []uint64{seq})
 - `internal/workqueue/` — WorkQueue core (keys/encoding, enqueue/dequeue, leases, retry/DLQ)
 - `internal/storage/pebble/` — Pebble wrapper (options, batches, snapshots)
 - `proto/flo/v1/` — Public service surfaces (Channels/Admin/Health)
-- `legacy/flo/` — Previous implementation kept for reference
 
 ## Contributing
 Issues and PRs are welcome. Please run tests locally:
