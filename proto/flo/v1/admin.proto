@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package flo.v1;
 
-option go_package = "github.com/rzbill/flo/proto/gen/go/flo/v1;flov1";
+option go_package = "github.com/rzbill/flo/api/flo/v1;flov1";
 
 // Admin provides introspection and housekeeping APIs.
 service AdminService {

@@ -3,6 +3,7 @@ package workqueue
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -490,6 +491,99 @@ func (q *WorkQueue) StartSweeper(interval time.Duration, maxPerTick int, default
 			}
 		}
 	}()
+}
+
+// QueuedMessageInfo contains metadata about a queued message.
+type QueuedMessageInfo struct {
+	ID           []byte
+	Seq          uint64
+	Partition    uint32
+	Priority     uint32
+	EnqueuedAtMs int64
+	DelayUntilMs int64
+	Header       []byte
+	Payload      []byte
+	PayloadSize  int32
+}
+
+// ListQueuedMessages returns messages waiting in the priority queue.
+// Returns messages in priority order (lower priority values first).
+func (q *WorkQueue) ListQueuedMessages(ctx context.Context, limit int, includePayload bool) ([]*QueuedMessageInfo, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	prefix := PrioPrefix(q.namespace, q.queue)
+	hi := append(append([]byte{}, prefix...), 0xFF)
+
+	iter, err := q.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: hi,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create iterator: %w", err)
+	}
+	defer iter.Close()
+
+	messages := make([]*QueuedMessageInfo, 0, limit)
+
+	// Scan priority index in order (lower priority = higher precedence)
+	for ok := iter.First(); ok && len(messages) < limit; ok = iter.Next() {
+		key := iter.Key()
+
+		// Parse priority and seq from key
+		// Key format: prefix + priority (4 bytes) + id (16 bytes, with seq in last 8 bytes)
+		if len(key) < len(prefix)+4+16 {
+			continue
+		}
+
+		priority := binary.BigEndian.Uint32(key[len(prefix):])
+		seq := binary.BigEndian.Uint64(key[len(key)-8:]) // Seq is in last 8 bytes
+
+		// Build message ID
+		var id [16]byte
+		binary.BigEndian.PutUint32(id[0:4], q.part)
+		binary.BigEndian.PutUint64(id[8:16], seq)
+
+		// Get message data
+		msgKey := MsgKey(q.namespace, q.queue, q.part, seq)
+		msgData, err := q.db.Get(msgKey)
+		if err != nil {
+			continue // Message might have been deleted
+		}
+
+		// Decode message
+		decoded, ok := DecodeMessage(msgData)
+		if !ok {
+			continue
+		}
+
+		info := &QueuedMessageInfo{
+			ID:          id[:],
+			Seq:         seq,
+			Partition:   q.part,
+			Priority:    priority,
+			Header:      decoded.Header,
+			PayloadSize: int32(len(decoded.Payload)),
+		}
+
+		// Include payload if requested
+		if includePayload {
+			info.Payload = decoded.Payload
+		}
+
+		// Check if message is delayed
+		// Note: We don't know the exact delayUntilMs without scanning the delay index,
+		// so we'll skip delay checking here for now. Delayed messages won't appear
+		// in the priority index scan anyway.
+
+		messages = append(messages, info)
+	}
+
+	return messages, nil
 }
 
 // StopSweeper stops the background sweeper.

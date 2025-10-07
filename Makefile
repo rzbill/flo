@@ -1,7 +1,12 @@
-.PHONY: build test lint generate tidy proto proto-clean coverage coverage-report coverage-summary coverage-check
+.PHONY: build build-flo install test lint generate tidy proto proto-clean coverage coverage-report coverage-summary coverage-check
 
 PROTO_DIR := proto
-PROTO_GO_OUT := $(PROTO_DIR)/gen/go
+PROTO_GO_OUT := api
+API_DIR := api
+
+# Binaries
+BIN_DIR := bin
+BINARY_NAME := flo
 
 ## Coverage
 COVERAGE_FILE := coverage.out
@@ -9,6 +14,34 @@ THRESHOLD ?= $(or $(COVERAGE_THRESHOLD),50)
 
 build:
 	go build ./...
+
+dashboard-build:
+	cd dashboard && ( [ -f package-lock.json ] && npm ci || npm install ) && npm run build
+	@# Sync built assets into internal/ui/static for embedding
+	rm -rf internal/ui/static
+	mkdir -p internal/ui/static
+	cp -R dashboard/dist/* internal/ui/static/
+
+# Build the flo CLI binary
+build-flo:
+	@mkdir -p $(BIN_DIR)
+	go build -o $(BIN_DIR)/$(BINARY_NAME) ./cmd/flo
+
+## Install binaries to GOPATH/bin (fallback to $(HOME)/go/bin if GOPATH unset)
+install: build-flo dashboard-build
+	@echo "Installing $(BINARY_NAME)..."
+	@install -m 755 $(BIN_DIR)/$(BINARY_NAME) $(GOPATH)/bin/ 2>/dev/null || install -m 755 $(BIN_DIR)/$(BINARY_NAME) $(HOME)/go/bin/
+	@echo "Installation completed!"
+
+install-dashboard: dashboard-build
+	@echo "Installing dashboard..."
+	@install -m 755 dashboard/dist/* $(HOME)/go/bin/
+	@echo "Installation completed!"
+
+install-flo: build-flo
+	@echo "Installing $(BINARY_NAME)..."
+	@install -m 755 $(BIN_DIR)/$(BINARY_NAME) $(GOPATH)/bin/ 2>/dev/null || install -m 755 $(BIN_DIR)/$(BINARY_NAME) $(HOME)/go/bin/
+	@echo "Installation completed!"
 
 test:
 	go test ./...

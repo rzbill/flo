@@ -1,5 +1,5 @@
 // Package grpcserver hosts the gRPC server for Flo, registering Health and
-// Channels services and delegating to the shared services layer.
+// Streams services and delegating to the shared services layer.
 //
 // Example:
 //

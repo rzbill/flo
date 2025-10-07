@@ -1,0 +1,249 @@
+syntax = "proto3";
+
+package flo.v1;
+
+option go_package = "github.com/rzbill/flo/api/flo/v1;flov1";
+
+// Streams provides a pub/sub facade over EventLog.
+service StreamsService {
+  rpc Create(CreateStreamRequest) returns (CreateStreamResponse);
+  rpc Publish(PublishRequest) returns (PublishResponse);
+  rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
+  rpc Tail(TailRequest) returns (stream SubscribeResponse);
+  rpc Ack(AckRequest) returns (AckResponse);
+  rpc Nack(NackRequest) returns (NackResponse);
+  rpc ListMessages(ListMessagesRequest) returns (ListMessagesResponse);
+  rpc GetStats(GetStreamStatsRequest) returns (GetStreamStatsResponse);
+  rpc Flush(FlushStreamRequest) returns (FlushStreamResponse);
+  rpc DeleteMessage(DeleteMessageRequest) returns (DeleteMessageResponse);
+  rpc ListRetryMessages(ListRetryMessagesRequest) returns (ListRetryMessagesResponse);
+  rpc ListDLQMessages(ListDLQMessagesRequest) returns (ListDLQMessagesResponse);
+  rpc GetRetryDLQStats(GetRetryDLQStatsRequest) returns (GetRetryDLQStatsResponse);
+}
+
+message CreateStreamRequest {
+  string namespace = 1;
+  string name = 2;
+  int32 partitions = 3; // default from server if zero
+  int64 retention_age_ms = 4; // optional: trim messages older than this age
+  int64 max_len_bytes = 5;    // optional: approximate total bytes cap across partitions
+}
+
+message CreateStreamResponse {}
+
+message PublishRequest {
+  string namespace = 1;
+  string stream = 2;
+  bytes payload = 3;
+  map<string, string> headers = 4;
+  string key = 5; // for partitioning and idempotency, optional
+}
+
+message PublishResponse {
+  bytes id = 1;
+}
+
+message SubscribeRequest {
+  string namespace = 1;
+  string stream = 2;
+  string group = 3;
+  bytes start_token = 4; // optional
+  string from = 5;       // "latest" (default) | "earliest"
+  int64 at_ms = 6;       // start at first record with header ts >= at_ms (ms)
+  int32 limit = 7;       // max messages to deliver (0 = no limit)
+  RetryPolicy policy = 8;      // optional retry policy to persist/apply for this group
+  int64 retry_pace_ms = 9;     // optional pacing between multiple due retries (ms)
+  string filter = 10;     // CEL filter (optional)
+}
+
+message SubscribeResponse {
+  bytes id = 1;
+  bytes payload = 2;
+  map<string, string> headers = 3;
+}
+
+message TailRequest {
+  string namespace = 1;
+  string stream = 2;
+  bytes start_token = 3; // optional
+  string from = 4;       // "latest"|"earliest"
+  int64 at_ms = 5;
+  int32 limit = 6;
+  string filter = 7;     // CEL filter (optional)
+}
+
+// Retry policy structure for backoff control
+message RetryPolicy {
+  string type = 1;        // "exp" | "exp-jitter" | "fixed" | "none"
+  int64 base_ms = 2;      // base delay in ms
+  int64 cap_ms = 3;       // cap per-attempt delay in ms
+  double factor = 4;      // growth factor for exponential
+  uint32 max_attempts = 5;// maximum attempts before DLQ
+}
+
+message AckRequest {
+  string namespace = 1;
+  string stream = 2;
+  string group = 3;
+  bytes id = 4;
+}
+
+message AckResponse {}
+
+message NackRequest {
+  string namespace = 1;
+  string stream = 2;
+  string group = 3;
+  bytes id = 4;
+  string error = 5;  // Error message for debugging
+}
+
+message NackResponse {}
+
+
+// List messages from a stream (partition-scoped), paginated.
+message ListMessagesRequest {
+  string namespace = 1;
+  string stream = 2;
+  int32 partition = 3;      // default 0 if not set
+  bytes start_token = 4;    // inclusive; empty to start from boundary
+  int32 limit = 5;          // max items; 0 means server default
+  bool reverse = 6;         // newest-to-oldest if true
+}
+
+message MessageItem {
+  bytes id = 1;             // 8-byte token
+  bytes payload = 2;
+  bytes header = 3;
+  uint64 seq = 4;
+  uint32 partition = 5;
+}
+
+message ListMessagesResponse {
+  repeated MessageItem items = 1;
+  bytes next_token = 2;
+}
+
+// Stream stats across partitions.
+message GetStreamStatsRequest {
+  string namespace = 1;
+  string stream = 2;
+}
+
+message PartitionStats {
+  uint32 partition = 1;
+  uint64 first_seq = 2;
+  uint64 last_seq = 3;
+  uint64 count = 4;
+  uint64 bytes = 5;
+  uint64 last_publish_ms = 6;
+}
+
+message GetStreamStatsResponse {
+  repeated PartitionStats partitions = 1;
+  uint64 total_count = 2;
+  uint64 total_bytes = 3;
+  int32 active_subscribers = 4;
+  uint64 last_publish_ms = 5;
+  uint64 last_delivered_ms = 6;
+  int32 groups_count = 7;
+}
+
+// Flush all messages from a stream (or specific partition).
+message FlushStreamRequest {
+  string namespace = 1;
+  string stream = 2;
+  int32 partition = 3; // optional; if not set, flushes all partitions
+}
+
+message FlushStreamResponse {
+  uint64 deleted_count = 1;
+}
+
+// Delete a specific message by ID from a stream.
+message DeleteMessageRequest {
+  string namespace = 1;
+  string stream = 2;
+  bytes message_id = 3;
+}
+
+message DeleteMessageResponse {}
+
+// Retry and DLQ Management
+
+message ListRetryMessagesRequest {
+  string namespace = 1;
+  string stream = 2;
+  string group = 3;           // optional; if not set, returns all groups
+  bytes start_token = 4;      // optional; for pagination
+  int32 limit = 5;            // max items; 0 means server default
+  bool reverse = 6;           // newest-to-oldest if true
+}
+
+message RetryMessageItem {
+  bytes id = 1;               // 8-byte token
+  bytes payload = 2;          // original message payload
+  map<string, string> headers = 3;
+  uint32 partition = 4;
+  uint64 seq = 5;
+  uint32 retry_count = 6;     // current retry attempt
+  uint32 max_retries = 7;     // maximum retry attempts
+  int64 next_retry_at_ms = 8; // when this message will be retried
+  int64 created_at_ms = 9;    // when the message was first created
+  string last_error = 10;     // last error message
+  string group = 11;          // consumer group
+}
+
+message ListRetryMessagesResponse {
+  repeated RetryMessageItem items = 1;
+  bytes next_token = 2;
+}
+
+message ListDLQMessagesRequest {
+  string namespace = 1;
+  string stream = 2;
+  string group = 3;           // optional; if not set, returns all groups
+  bytes start_token = 4;      // optional; for pagination
+  int32 limit = 5;            // max items; 0 means server default
+  bool reverse = 6;           // newest-to-oldest if true
+}
+
+message DLQMessageItem {
+  bytes id = 1;               // 8-byte token
+  bytes payload = 2;          // original message payload
+  map<string, string> headers = 3;
+  uint32 partition = 4;
+  uint64 seq = 5;
+  uint32 retry_count = 6;     // final retry count
+  uint32 max_retries = 7;     // maximum retry attempts
+  int64 failed_at_ms = 8;     // when the message failed permanently
+  string last_error = 9;      // last error message
+  string group = 10;          // consumer group
+}
+
+message ListDLQMessagesResponse {
+  repeated DLQMessageItem items = 1;
+  bytes next_token = 2;
+}
+
+message GetRetryDLQStatsRequest {
+  string namespace = 1;
+  string stream = 2;
+  string group = 3;           // optional; if not set, returns stats for all groups
+}
+
+message RetryDLQStats {
+  string namespace = 1;
+  string stream = 2;
+  string group = 3;
+  uint32 retry_count = 4;     // number of messages in retry queue
+  uint32 dlq_count = 5;       // number of messages in DLQ
+  uint32 total_retries = 6;   // total retry attempts across all messages
+  double success_rate = 7;    // success rate percentage (0-100)
+  repeated string groups = 8; // available groups for this stream
+}
+
+message GetRetryDLQStatsResponse {
+  repeated RetryDLQStats stats = 1;
+}
+

@@ -3,8 +3,8 @@ package grpcserver
 import (
 	"context"
 
+	flov1 "github.com/rzbill/flo/api/flo/v1"
 	"github.com/rzbill/flo/internal/runtime"
-	flov1 "github.com/rzbill/flo/proto/gen/go/flo/v1"
 )
 
 type healthSvc struct {

@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
+	flov1 "github.com/rzbill/flo/api/flo/v1"
 	cfgpkg "github.com/rzbill/flo/internal/config"
 	"github.com/rzbill/flo/internal/runtime"
 	pebblestore "github.com/rzbill/flo/internal/storage/pebble"
-	flov1 "github.com/rzbill/flo/proto/gen/go/flo/v1"
+	logpkg "github.com/rzbill/flo/pkg/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
 )
@@ -29,7 +30,8 @@ func TestHealthOverGRPC(t *testing.T) {
 		t.Fatalf("rt open: %v", err)
 	}
 	defer rt.Close()
-	srv := New(rt)
+	logger, _ := logpkg.ApplyConfig(&logpkg.Config{Level: "error", Format: "text"})
+	srv := New(rt, logger)
 	d := dialer(srv.grpc)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -48,14 +50,15 @@ func TestHealthOverGRPC(t *testing.T) {
 	}
 }
 
-func TestChannelsPublishAckOverGRPC(t *testing.T) {
+func TestStreamsPublishAckOverGRPC(t *testing.T) {
 	dir := t.TempDir()
 	rt, err := runtime.Open(runtime.Options{DataDir: dir, Fsync: pebblestore.FsyncModeAlways, Config: cfgpkg.Default()})
 	if err != nil {
 		t.Fatalf("rt open: %v", err)
 	}
 	defer rt.Close()
-	srv := New(rt)
+	logger, _ := logpkg.ApplyConfig(&logpkg.Config{Level: "error", Format: "text"})
+	srv := New(rt, logger)
 	d := dialer(srv.grpc)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -64,14 +67,14 @@ func TestChannelsPublishAckOverGRPC(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer conn.Close()
-	c := flov1.NewChannelsServiceClient(conn)
+	c := flov1.NewStreamsServiceClient(conn)
 
-	// Create channel
-	if _, err := c.CreateChannel(ctx, &flov1.CreateChannelRequest{Namespace: "default", Name: "orders"}); err != nil {
+	// Create stream
+	if _, err := c.Create(ctx, &flov1.CreateStreamRequest{Namespace: "default", Name: "orders"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	// Publish
-	pub, err := c.Publish(ctx, &flov1.PublishRequest{Namespace: "default", Channel: "orders", Payload: []byte("hi")})
+	pub, err := c.Publish(ctx, &flov1.PublishRequest{Namespace: "default", Stream: "orders", Payload: []byte("hi")})
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
@@ -79,7 +82,7 @@ func TestChannelsPublishAckOverGRPC(t *testing.T) {
 		t.Fatalf("missing id")
 	}
 	// Ack
-	if _, err := c.Ack(ctx, &flov1.AckRequest{Namespace: "default", Channel: "orders", Group: "workers", Id: pub.GetId()}); err != nil {
+	if _, err := c.Ack(ctx, &flov1.AckRequest{Namespace: "default", Stream: "orders", Group: "workers", Id: pub.GetId()}); err != nil {
 		t.Fatalf("ack: %v", err)
 	}
 }

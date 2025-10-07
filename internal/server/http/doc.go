@@ -1,5 +1,5 @@
 // Package httpserver provides a minimal REST gateway for Flo with SSE
-// subscribe support and JSON endpoints mirroring the Channels surface.
+// subscribe support and JSON endpoints mirroring the Streams surface.
 //
 // Example:
 //

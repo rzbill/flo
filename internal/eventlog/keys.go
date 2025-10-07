@@ -18,6 +18,7 @@ var (
 	cursorSeg  = []byte("/cursor/")
 	metaSuffix = []byte("/m")
 	entrySeg   = []byte("/e/")
+	ldSuffix   = []byte("/ts")
 )
 
 func appendBE4(dst []byte, v uint32) []byte {
@@ -70,5 +71,25 @@ func KeyCursor(namespace, topic, group string, partition uint32) []byte {
 	k = append(k, group...)
 	k = append(k, sep)
 	k = appendBE4(k, partition)
+	return k
+}
+
+// KeyCursorLastDelivered builds a key colocated with cursor to store last-delivered time (ms).
+// Layout: ns/{ns}/cursor/{topic}/{group}/{part_be4}/ts
+func KeyCursorLastDelivered(namespace, topic, group string, partition uint32) []byte {
+	k := KeyCursor(namespace, topic, group, partition)
+	k = append(k, ldSuffix...)
+	return k
+}
+
+// KeyCursorLastDeliveredPrefix returns a range prefix to scan all last-delivered keys for a topic across groups/partitions.
+// Layout prefix: ns/{ns}/cursor/{topic}/
+func KeyCursorLastDeliveredPrefix(namespace, topic string) []byte {
+	k := make([]byte, 0, len(namespace)+len(topic)+24)
+	k = append(k, nsPrefix...)
+	k = append(k, namespace...)
+	k = append(k, cursorSeg...)
+	k = append(k, topic...)
+	k = append(k, sep)
 	return k
 }

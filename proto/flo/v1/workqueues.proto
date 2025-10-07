@@ -1,0 +1,363 @@
+syntax = "proto3";
+
+package flo.v1;
+
+import "flo/v1/streams.proto";
+
+option go_package = "github.com/rzbill/flo/api/flo/v1;flov1";
+
+// WorkQueues provides a task queue facade with one-of-N delivery semantics.
+// Unlike Streams (pub/sub fanout), WorkQueues ensure only one worker processes each message.
+service WorkQueuesService {
+  // Core Operations
+  rpc CreateWorkQueue(CreateWorkQueueRequest) returns (CreateWorkQueueResponse);
+  rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
+  rpc Dequeue(DequeueRequest) returns (stream DequeueResponse);
+  rpc Complete(CompleteRequest) returns (CompleteResponse);
+  rpc Fail(FailRequest) returns (FailResponse);
+  rpc ExtendLease(ExtendLeaseRequest) returns (ExtendLeaseResponse);
+  
+  // Consumer Registry
+  rpc RegisterConsumer(RegisterConsumerRequest) returns (RegisterConsumerResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc UnregisterConsumer(UnregisterConsumerRequest) returns (UnregisterConsumerResponse);
+  rpc ListConsumers(ListConsumersRequest) returns (ListConsumersResponse);
+  
+  // Pending Entries List (PEL) & Claims
+  rpc ListPending(ListPendingRequest) returns (ListPendingResponse);
+  rpc Claim(ClaimRequest) returns (ClaimResponse);
+  
+  // Admin & Introspection
+  rpc GetWorkQueueStats(GetWorkQueueStatsRequest) returns (GetWorkQueueStatsResponse);
+  rpc ListReadyMessages(ListReadyMessagesRequest) returns (ListReadyMessagesResponse);
+  rpc ListDLQMessages(ListWorkQueueDLQRequest) returns (ListWorkQueueDLQResponse);
+  rpc ListCompleted(ListCompletedRequest) returns (ListCompletedResponse);
+  rpc Flush(FlushWorkQueueRequest) returns (FlushWorkQueueResponse);
+}
+
+// ============================================================================
+// CreateWorkQueue
+// ============================================================================
+
+message CreateWorkQueueRequest {
+  string namespace = 1;
+  string name = 2;
+  int32 partitions = 3;           // default from server if zero
+  int64 retention_age_ms = 4;     // optional EventLog mirror retention
+  int64 max_len_bytes = 5;        // optional mirror size cap
+}
+
+message CreateWorkQueueResponse {}
+
+// ============================================================================
+// Enqueue
+// ============================================================================
+
+message EnqueueRequest {
+  string namespace = 1;
+  string name = 2;
+  bytes payload = 3;
+  map<string, string> headers = 4;
+  string key = 5;                 // partitioning key
+  int32 priority = 6;             // higher = processed first (default 0)
+  int64 delay_ms = 7;             // deliver after this delay (default 0)
+  string idempotency_key = 8;     // optional deduplication
+}
+
+message EnqueueResponse {
+  bytes id = 1;
+}
+
+// ============================================================================
+// Dequeue
+// ============================================================================
+
+message DequeueRequest {
+  string namespace = 1;
+  string name = 2;
+  string group = 3;               // consumer group
+  string consumer_id = 4;         // unique consumer identifier
+  int32 count = 5;                // max messages to dequeue (default 1, max 100)
+  int64 lease_ms = 6;             // lease duration (default 30000)
+  int64 block_ms = 7;             // block for new messages (default 5000)
+  RetryPolicy policy = 8;         // optional retry policy for this group
+  int64 retry_pace_ms = 9;        // optional pacing between retries
+}
+
+message DequeueResponse {
+  bytes id = 1;
+  bytes payload = 2;
+  map<string, string> headers = 3;
+  int32 partition = 4;
+  int64 enqueued_at_ms = 5;
+  int32 delivery_count = 6;       // number of times delivered
+  int64 lease_expires_at_ms = 7;
+}
+
+// ============================================================================
+// Complete / Fail / ExtendLease
+// ============================================================================
+
+message CompleteRequest {
+  string namespace = 1;
+  string name = 2;
+  string group = 3;
+  bytes id = 4;
+}
+
+message CompleteResponse {}
+
+message FailRequest {
+  string namespace = 1;
+  string name = 2;
+  string group = 3;
+  bytes id = 4;
+  string error = 5;               // error message
+  int64 retry_after_ms = 6;       // optional override
+}
+
+message FailResponse {}
+
+message ExtendLeaseRequest {
+  string namespace = 1;
+  string name = 2;
+  string group = 3;
+  bytes id = 4;
+  int64 extension_ms = 5;         // additional lease time
+}
+
+message ExtendLeaseResponse {
+  int64 new_expires_at_ms = 1;
+}
+
+// ============================================================================
+// Consumer Registry
+// ============================================================================
+
+message RegisterConsumerRequest {
+  string namespace = 1;
+  string name = 2;
+  string group = 3;
+  string consumer_id = 4;
+  int32 capacity = 5;             // max in-flight messages
+  map<string, string> labels = 6; // optional metadata
+  int64 heartbeat_ttl_ms = 7;     // TTL for heartbeat (default 15000)
+}
+
+message RegisterConsumerResponse {}
+
+message HeartbeatRequest {
+  string namespace = 1;
+  string name = 2;
+  string group = 3;
+  string consumer_id = 4;
+  int32 in_flight = 5;            // current in-flight count
+}
+
+message HeartbeatResponse {
+  int64 expires_at_ms = 1;
+}
+
+message UnregisterConsumerRequest {
+  string namespace = 1;
+  string name = 2;
+  string group = 3;
+  string consumer_id = 4;
+}
+
+message UnregisterConsumerResponse {}
+
+message ListConsumersRequest {
+  string namespace = 1;
+  string name = 2;
+  string group = 3;
+}
+
+message ListConsumersResponse {
+  repeated ConsumerInfo consumers = 1;
+}
+
+message ConsumerInfo {
+  string consumer_id = 1;
+  int32 capacity = 2;
+  int32 in_flight = 3;
+  map<string, string> labels = 4;
+  int64 last_seen_ms = 5;
+  int64 expires_at_ms = 6;
+  bool is_alive = 7;
+}
+
+// ============================================================================
+// Pending Entries List (PEL) & Claims
+// ============================================================================
+
+message ListPendingRequest {
+  string namespace = 1;
+  string name = 2;
+  string group = 3;
+  string consumer_id = 4;         // optional: filter by consumer
+  int32 limit = 5;                // default 100
+  bytes start_token = 6;          // pagination
+}
+
+message ListPendingResponse {
+  repeated PendingEntry entries = 1;
+  bytes next_token = 2;
+}
+
+message PendingEntry {
+  bytes id = 1;
+  string consumer_id = 2;
+  int32 delivery_count = 3;
+  int64 last_delivery_ms = 4;
+  int64 lease_expires_at_ms = 5;
+  int64 idle_ms = 6;              // time since last delivery
+}
+
+message ClaimRequest {
+  string namespace = 1;
+  string name = 2;
+  string group = 3;
+  string new_consumer_id = 4;     // claim for this consumer
+  repeated bytes ids = 5;          // messages to claim
+  int64 lease_ms = 6;             // new lease duration
+}
+
+message ClaimResponse {
+  int32 claimed_count = 1;
+}
+
+// ============================================================================
+// Admin & Stats
+// ============================================================================
+
+message GetWorkQueueStatsRequest {
+  string namespace = 1;
+  string name = 2;
+  string group = 3;               // optional: stats for specific group
+}
+
+message GetWorkQueueStatsResponse {
+  int64 total_enqueued = 1;
+  int64 total_completed = 2;
+  int64 total_failed = 3;
+  int64 pending_count = 4;        // ready to dequeue
+  int64 in_flight_count = 5;      // leased
+  int64 retry_count = 6;          // waiting for retry
+  int64 dlq_count = 7;            // dead letter queue
+  repeated GroupStats groups = 8;
+}
+
+message GroupStats {
+  string group = 1;
+  int64 pending_count = 2;
+  int64 in_flight_count = 3;
+  int64 retry_count = 4;
+  int64 dlq_count = 5;
+  int32 consumer_count = 6;
+}
+
+// ============================================================================
+// ListReadyMessages (Messages Waiting in Queue)
+// ============================================================================
+
+message ListReadyMessagesRequest {
+  string namespace = 1;
+  string name = 2;
+  int32 partition = 3;            // partition to query (default 0)
+  int32 limit = 4;                // max entries to return (default 100, max 1000)
+  bool include_payload = 5;       // include message payload (default false)
+}
+
+message ListReadyMessagesResponse {
+  repeated ReadyMessage messages = 1;
+}
+
+message ReadyMessage {
+  bytes id = 1;
+  uint64 seq = 2;
+  uint32 partition = 3;
+  uint32 priority = 4;            // lower = higher priority
+  int64 enqueued_at_ms = 5;       // when enqueued (0 if not tracked)
+  int64 delay_until_ms = 6;       // if > now, message is delayed
+  map<string, string> headers = 7;
+  bytes payload = 8;              // only if include_payload=true
+  int32 payload_size = 9;         // size in bytes
+}
+
+// ============================================================================
+// ListDLQMessages
+// ============================================================================
+
+message ListWorkQueueDLQRequest {
+  string namespace = 1;
+  string name = 2;
+  string group = 3;
+  int32 limit = 4;
+  bytes start_token = 5;
+}
+
+message ListWorkQueueDLQResponse {
+  repeated DLQEntry entries = 1;
+  bytes next_token = 2;
+}
+
+message DLQEntry {
+  bytes id = 1;
+  bytes payload = 2;
+  map<string, string> headers = 3;
+  string last_error = 4;
+  int32 attempts = 5;
+  int64 dlq_at_ms = 6;
+}
+
+// ============================================================================
+// ListCompleted
+// ============================================================================
+
+message ListCompletedRequest {
+  string namespace = 1;
+  string name = 2;
+  string group = 3;               // optional: filter by group
+  int32 partition = 4;            // partition to query (default 0)
+  int32 limit = 5;                // max entries to return (default 100, max 1000)
+}
+
+message ListCompletedResponse {
+  repeated CompletedEntry entries = 1;
+}
+
+message CompletedEntry {
+  bytes id = 1;
+  uint64 seq = 2;
+  uint32 partition = 3;
+  string group = 4;
+  string consumer_id = 5;
+  int64 enqueued_at_ms = 6;       // when message was enqueued (0 if not tracked)
+  int64 dequeued_at_ms = 7;       // when message was dequeued
+  int64 completed_at_ms = 8;      // when message was completed
+  int64 duration_ms = 9;          // processing duration (completed - dequeued)
+  int32 delivery_count = 10;      // number of delivery attempts
+  int32 payload_size = 11;        // size of payload in bytes (0 if not tracked)
+  map<string, string> headers = 12; // optional headers (if configured)
+}
+
+// ============================================================================
+// FlushWorkQueue
+// ============================================================================
+
+message FlushWorkQueueRequest {
+  string namespace = 1;
+  string name = 2;
+  string group = 3;               // optional: flush specific group's queues
+  bool flush_dlq = 4;             // also flush DLQ
+}
+
+message FlushWorkQueueResponse {
+  int64 flushed_count = 1;
+}
+
+// ============================================================================
+// Shared Types
+// ============================================================================
+// RetryPolicy is imported from streams.proto

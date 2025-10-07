@@ -32,3 +32,18 @@ coverage.html
 
 # Corpus Packer files
 *.corpus.txt
+
+# Dashboard (React/Vite/Node.js) specific files
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
+dashboard/.env
+dashboard/.env.local
+dashboard/.env.development.local
+dashboard/.env.test.local
+dashboard/.env.production.local
+dashboard/npm-debug.log*
+dashboard/yarn-debug.log*
+dashboard/yarn-error.log*
+dashboard/.pnpm-debug.log*
+dashboard/.DS_Store

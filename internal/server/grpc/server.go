@@ -3,26 +3,50 @@ package grpcserver
 import (
 	"context"
 	"net"
+	"time"
 
+	flov1 "github.com/rzbill/flo/api/flo/v1"
 	"github.com/rzbill/flo/internal/runtime"
-	channelsvc "github.com/rzbill/flo/internal/services/channels"
-	flov1 "github.com/rzbill/flo/proto/gen/go/flo/v1"
+	streamsvc "github.com/rzbill/flo/internal/services/streams"
+	workqueuesvc "github.com/rzbill/flo/internal/services/workqueues"
+	logpkg "github.com/rzbill/flo/pkg/log"
 	"google.golang.org/grpc"
 )
 
 // Server owns the gRPC server instance and runtime.
 type Server struct {
 	rt    *runtime.Runtime
-	chsvc *channelsvc.Service
+	chsvc *streamsvc.Service
+	wqsvc *workqueuesvc.Service
 	grpc  *grpc.Server
 	lis   net.Listener
 }
 
 // New constructs a gRPC server and registers services.
-func New(rt *runtime.Runtime, opts ...grpc.ServerOption) *Server {
-	s := &Server{rt: rt, chsvc: channelsvc.New(rt), grpc: grpc.NewServer(opts...)}
+func New(rt *runtime.Runtime, logger logpkg.Logger, opts ...grpc.ServerOption) *Server {
+	s := &Server{
+		rt:    rt,
+		chsvc: streamsvc.NewWithLogger(rt, logger.With(logpkg.Component("streams"))),
+		wqsvc: workqueuesvc.NewWithLogger(rt, logger.With(logpkg.Component("workqueues"))),
+		grpc:  grpc.NewServer(opts...),
+	}
 	flov1.RegisterHealthServiceServer(s.grpc, &healthSvc{rt: rt})
-	flov1.RegisterChannelsServiceServer(s.grpc, &channelsSvc{svc: s.chsvc})
+	flov1.RegisterStreamsServiceServer(s.grpc, &streamsSvc{svc: s.chsvc})
+	flov1.RegisterWorkQueuesServiceServer(s.grpc, &workQueuesSvc{svc: s.wqsvc})
+	return s
+}
+
+// NewWithService constructs a gRPC server using shared service instances.
+func NewWithService(rt *runtime.Runtime, streams *streamsvc.Service, workQueues *workqueuesvc.Service, logger logpkg.Logger, opts ...grpc.ServerOption) *Server {
+	s := &Server{
+		rt:    rt,
+		chsvc: streams,
+		wqsvc: workQueues,
+		grpc:  grpc.NewServer(opts...),
+	}
+	flov1.RegisterHealthServiceServer(s.grpc, &healthSvc{rt: rt})
+	flov1.RegisterStreamsServiceServer(s.grpc, &streamsSvc{svc: s.chsvc})
+	flov1.RegisterWorkQueuesServiceServer(s.grpc, &workQueuesSvc{svc: s.wqsvc})
 	return s
 }
 
@@ -47,7 +71,17 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 // Close stops the server and closes the listener.
 func (s *Server) Close() {
 	if s.grpc != nil {
-		s.grpc.GracefulStop()
+		done := make(chan struct{})
+		go func() {
+			s.grpc.GracefulStop()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			// Force close long-lived streams (e.g., Subscribe) so shutdown doesn't hang
+			s.grpc.Stop()
+		}
 	}
 	if s.lis != nil {
 		_ = s.lis.Close()

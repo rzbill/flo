@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/cockroachdb/pebble"
 	pebblestore "github.com/rzbill/flo/internal/storage/pebble"
 )
 
@@ -79,3 +80,75 @@ func (l *Log) Append(ctx context.Context, recs []AppendRecord) ([]uint64, error)
 }
 
 var ErrNotFound = errors.New("event not found")
+
+// FirstSeq returns the first existing sequence number for this partition, if any.
+// Returns 0 when empty.
+func (l *Log) FirstSeq() uint64 {
+	low := KeyLogEntry(l.namespace, l.topic, l.part, 0)
+	hi := KeyLogEntry(l.namespace, l.topic, l.part, ^uint64(0))
+	iter, err := l.db.NewIter(&pebble.IterOptions{LowerBound: low, UpperBound: append(hi, 0x00)})
+	if err != nil {
+		return 0
+	}
+	defer iter.Close()
+	if !iter.First() {
+		return 0
+	}
+	return binary.BigEndian.Uint64(iter.Key()[len(low)-8:])
+}
+
+// LastSeq returns the last existing sequence number for this partition, if any.
+// Returns 0 when empty.
+func (l *Log) LastSeq() uint64 {
+	low := KeyLogEntry(l.namespace, l.topic, l.part, 0)
+	hi := KeyLogEntry(l.namespace, l.topic, l.part, ^uint64(0))
+	iter, err := l.db.NewIter(&pebble.IterOptions{LowerBound: low, UpperBound: append(hi, 0x00)})
+	if err != nil {
+		return 0
+	}
+	defer iter.Close()
+	if !iter.Last() {
+		return 0
+	}
+	return binary.BigEndian.Uint64(iter.Key()[len(low)-8:])
+}
+
+// Stats summarizes message count and total bytes for this log partition.
+// Bytes is the sum of value lengths across entries in the partition.
+func (l *Log) Stats() (firstSeq uint64, lastSeq uint64, count uint64, bytes uint64, err error) {
+	low := KeyLogEntry(l.namespace, l.topic, l.part, 0)
+	hi := KeyLogEntry(l.namespace, l.topic, l.part, ^uint64(0))
+	iter, ierr := l.db.NewIter(&pebble.IterOptions{LowerBound: low, UpperBound: append(hi, 0x00)})
+	if ierr != nil {
+		err = ierr
+		return
+	}
+	defer iter.Close()
+	if !iter.First() {
+		// empty
+		return
+	}
+	for ok := true; ok; ok = iter.Next() {
+		seq := binary.BigEndian.Uint64(iter.Key()[len(low)-8:])
+		if count == 0 {
+			firstSeq = seq
+		}
+		lastSeq = seq
+		bytes += uint64(len(iter.Value()))
+		count++
+	}
+	return
+}
+
+// LastPublishMs returns the header timestamp (ms) of the latest record in this partition.
+// When the partition is empty, or the last record lacks an 8-byte header timestamp, returns 0.
+func (l *Log) LastPublishMs() uint64 {
+	items, _ := l.Read(ReadOptions{Reverse: true, Limit: 1})
+	if len(items) == 0 {
+		return 0
+	}
+	if len(items[0].Header) >= 8 {
+		return binary.BigEndian.Uint64(items[0].Header[:8])
+	}
+	return 0
+}

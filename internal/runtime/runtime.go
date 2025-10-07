@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"errors"
+	"sync"
+	"time"
 
 	cfgpkg "github.com/rzbill/flo/internal/config"
 	"github.com/rzbill/flo/internal/eventlog"
@@ -13,24 +15,27 @@ import (
 
 // Options for building the Runtime.
 type Options struct {
-	DataDir string
-	Fsync   pebblestore.FsyncMode
-	Config  cfgpkg.Config
+	DataDir       string
+	Fsync         pebblestore.FsyncMode
+	FsyncInterval time.Duration
+	Config        cfgpkg.Config
 }
 
 // Runtime wires storage, config, and facades for a single-node instance.
 type Runtime struct {
 	db     *pebblestore.DB
 	config cfgpkg.Config
+	logsMu sync.Mutex
+	logs   map[string]*eventlog.Log
 }
 
 // Open initializes the underlying storage and returns a Runtime.
 func Open(opts Options) (*Runtime, error) {
-	db, err := pebblestore.Open(pebblestore.Options{DataDir: opts.DataDir, Fsync: opts.Fsync})
+	db, err := pebblestore.Open(pebblestore.Options{DataDir: opts.DataDir, Fsync: opts.Fsync, FsyncInterval: opts.FsyncInterval})
 	if err != nil {
 		return nil, err
 	}
-	rt := &Runtime{db: db, config: opts.Config}
+	rt := &Runtime{db: db, config: opts.Config, logs: make(map[string]*eventlog.Log)}
 	return rt, nil
 }
 
@@ -62,7 +67,27 @@ func (r *Runtime) EnsureNamespace(name string) (namespace.Meta, error) {
 
 // OpenLog opens an event log for given namespace/topic/partition.
 func (r *Runtime) OpenLog(ns, topic string, partition uint32) (*eventlog.Log, error) {
-	return eventlog.OpenLog(r.db, ns, topic, partition)
+	key := r.logKey(ns, topic, partition)
+	r.logsMu.Lock()
+	if l, ok := r.logs[key]; ok {
+		r.logsMu.Unlock()
+		return l, nil
+	}
+	r.logsMu.Unlock()
+	// Create outside the lock to avoid blocking
+	l, err := eventlog.OpenLog(r.db, ns, topic, partition)
+	if err != nil {
+		return nil, err
+	}
+	r.logsMu.Lock()
+	// Double-check in case another goroutine created it
+	if existing, ok := r.logs[key]; ok {
+		r.logsMu.Unlock()
+		return existing, nil
+	}
+	r.logs[key] = l
+	r.logsMu.Unlock()
+	return l, nil
 }
 
 // OpenQueue opens a work queue for given namespace/queue/partition.
@@ -75,3 +100,9 @@ func (r *Runtime) DB() *pebblestore.DB { return r.db }
 
 // Config returns the runtime configuration.
 func (r *Runtime) Config() cfgpkg.Config { return r.config }
+
+func (r *Runtime) logKey(ns, topic string, partition uint32) string {
+	// ns|topic|part
+	// Allocate small buffer
+	return ns + "|" + topic + "|" + string(rune(partition))
+}

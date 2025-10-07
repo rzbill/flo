@@ -1,43 +1,59 @@
-// Package workqueue defines the internal keyspace, record format, and basic
-// queue operations (enqueue, dequeue with leases, extend, complete, fail) for
-// Flo's WorkQueue.
+// Package workqueue implements a one-of-N task queue with lease-based delivery.
 //
-// # Keys (namespace-scoped)
+// Unlike EventLog (used by Streams for fanout pub/sub), WorkQueue ensures that
+// each message is delivered to exactly one consumer in a group. This is achieved
+// through:
 //
-//   - ns/{ns}/q/{queue}/{part_be4}/msg/{seq_be8}           (message payload)
-//   - ns/{ns}/q/{queue}/{part_be4}/m                      (partition metadata)
-//   - ns/{ns}/q_prio/{queue}/{priority_be4}/{seq_be8}     (availability index)
-//   - ns/{ns}/q_delay/{queue}/{fire_ms_be8}/{msg_id_be16} (delay index)
-//   - ns/{ns}/q_lease/{queue}/{group}/{msg_id_be16}       (lease record)
-//   - ns/{ns}/q_lease_idx/{queue}/{expiry_ms_be8}/{msg_id_be16} (lease expiry idx)
-//   - ns/{ns}/q_dlq/{queue}/{group}/{msg_id_be16}         (dead-letter)
+// - Lease-based ownership: Messages are leased to consumers for a duration
+// - Pending Entries List (PEL): Tracks in-flight messages per consumer
+// - Auto-claim: Automatically reassigns stalled messages from dead consumers
+// - Priority ordering: Messages can have priorities for processing order
+// - Delayed delivery: Messages can be held until a specific time
+// - Retry & DLQ: Failed messages retry with backoff, then move to DLQ
 //
-// Partition metadata stores: lastSeq (8B) | availableCount (4B) for simple
-// backpressure accounting.
+// # Keyspace
 //
-// # Records
+// All keys are prefixed with ns/{namespace}/wq/{name}/:
 //
-// Message: headerLen(4B BE) | header | payload | crc32c(header|payload)
-// Lease:   expiryMs(8B BE) | attempts(4B BE)
-// Delay value: priority(4B BE) | seq(8B BE)
+//	msg/{id}                           - Message data
+//	priority_idx/{priority}/{id}       - Priority index for dequeue
+//	delay_idx/{ready_at_ms}/{id}       - Delayed message index
+//	lease/{group}/{id}                 - Active lease (expires_at_ms, consumer_id, deliveries)
+//	lease_idx/{group}/{expires_ms}/{id}- Lease expiry index for scanning
+//	pel/{group}/{consumer}/{id}        - Pending Entries List
+//	retry/{group}/{ready_at_ms}/{id}   - Retry schedule
+//	dlq/{group}/{id}                   - Dead Letter Queue
+//	cons/{group}/{consumer_id}         - Consumer registry
+//	cons_idx/{group}/{expires_ms}/{cid}- Consumer expiry index
+//	groupcfg/{group}                   - Group configuration (retry policy)
 //
-// # API (internal)
+// # Message Lifecycle
 //
-//	q, _ := OpenQueue(db, ns, name, part).WithOptions(QueueOptions{MaxAvailable: 10})
-//	// Enqueue with priority and optional delay
-//	seq, _ := q.Enqueue(ctx, hdr, body, 5 /*prio*/, 0 /*delayMs*/, 0)
+//  1. Enqueue: msg written, indexed by priority/delay
+//  2. Dequeue: msg leased to consumer, lease written, PEL updated
+//  3. Processing:
+//     - Extend: lease extended via heartbeat
+//     - Complete: msg deleted, lease removed, PEL cleared
+//     - Fail: retry scheduled or DLQ'd, lease removed, PEL updated
+//  4. Expiry: lease expires → msg available for re-dequeue
+//  5. Auto-claim: stalled msgs from dead consumers reassigned
 //
-//	// Dequeue creates leases ordered by priority (lower first)
-//	msgs, _ := q.Dequeue(ctx, "groupA", 10, 30_000, 0)
-//	_ = q.ExtendLease(ctx, "groupA", []uint64{msgs[0].Seq}, 30_000, 0)
-//	_ = q.Complete(ctx, "groupA", []uint64{msgs[0].Seq})
+// # At-Least-Once Semantics
 //
-//	// Fail with retry-after or DLQ
-//	_ = q.Fail(ctx, "groupA", []uint64{seq}, 5_000 /*retryAfterMs*/, false /*toDLQ*/, 0)
+// Messages are delivered at-least-once. Duplicates can occur if:
+// - Consumer crashes after processing but before Complete
+// - Lease expires while processing
+// - Network issues cause retries
 //
-// # Backpressure
+// Consumers should be idempotent or use deduplication caches.
 //
-// If QueueOptions.MaxAvailable > 0, Enqueue throttles when the simple
-// availableCount exceeds the threshold. This is a basic mechanism intended as a
-// starting point; production systems should rely on richer metrics/limits.
+// # Comparison with Streams
+//
+//	| Aspect           | Streams        | WorkQueues        |
+//	|------------------|----------------|-------------------|
+//	| Pattern          | Pub/Sub        | Task Queue        |
+//	| Delivery         | Everyone       | One-of-N          |
+//	| State            | Cursors        | Leases            |
+//	| Ordering         | Per partition  | Priority-based    |
+//	| Use Case         | Events/Logs    | Jobs/Tasks        |
 package workqueue

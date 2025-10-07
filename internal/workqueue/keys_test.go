@@ -29,3 +29,27 @@ func TestPrioKeyOrdering(t *testing.T) {
 		t.Fatalf("expected lower priority to sort first")
 	}
 }
+
+func TestLeasePrefixLayout(t *testing.T) {
+	p := LeasePrefix("ns", "queue", "group")
+	expected := "ns/ns/wq/queue/lease/group/"
+	if !bytes.Equal(p, []byte(expected)) {
+		t.Fatalf("unexpected LeasePrefix: got %q, want %q", string(p), expected)
+	}
+}
+
+func TestDelayPrefixLayout(t *testing.T) {
+	p := DelayPrefix("ns", "queue")
+	expected := "ns/ns/wq/queue/delay_idx/"
+	if !bytes.Equal(p, []byte(expected)) {
+		t.Fatalf("unexpected DelayPrefix: got %q, want %q", string(p), expected)
+	}
+}
+
+func TestPrioPrefixLayout(t *testing.T) {
+	p := PrioPrefix("ns", "queue")
+	expected := "ns/ns/wq/queue/priority_idx/"
+	if !bytes.Equal(p, []byte(expected)) {
+		t.Fatalf("unexpected PrioPrefix: got %q, want %q", string(p), expected)
+	}
+}

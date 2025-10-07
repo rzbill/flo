@@ -1,0 +1,65 @@
+name: Release API
+
+on:
+  push:
+    tags:
+      - 'api/v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/api/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Releasing API version: $VERSION"
+
+      - name: Verify API module
+        working-directory: ./api
+        run: |
+          go mod tidy
+          go mod verify
+          go test ./... || echo "No tests yet"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: API ${{ steps.version.outputs.version }}
+          body: |
+            ## Flo API ${{ steps.version.outputs.version }}
+            
+            Go module for Flo proto definitions and generated stubs.
+            
+            ### Installation
+            ```bash
+            go get github.com/rzbill/flo/api@${{ steps.version.outputs.version }}
+            ```
+            
+            ### Import
+            ```go
+            import flov1 "github.com/rzbill/flo/api/flo/v1"
+            ```
+            
+            ### Changes
+            See commit history for details.
+          draft: false
+          prerelease: false
+
+      - name: Notify success
+        run: |
+          echo "✅ API ${{ steps.version.outputs.version }} released successfully!"
+          echo "Go module: github.com/rzbill/flo/api@${{ steps.version.outputs.version }}"
+
